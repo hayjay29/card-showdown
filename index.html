@@ -222,6 +222,7 @@ const S = {
   allArtists: [], loadingArtists: false, artistErr: "", artistOpen: false, artistMode: false, artistPool: [],
   setPickerOpen: false, setSearch: "",
   communityStats: null,
+  speciesMode: false, species: "", speciesPool: [], speciesOpen: false, speciesErr: "", loadingSpecies: false, speciesInput: "",
 };
 
 // ---------- supabase community layer ----------
@@ -310,6 +311,11 @@ function baseCards(){
   return out;
 }
 function poolSource(){
+  if(S.speciesMode){
+    let c = S.speciesPool.filter(x => x.images && x.images.small);
+    if(S.pokemonOnly){ const m = c.filter(x => x.supertype === "Pokémon"); if(m.length) c = m; }
+    return c;
+  }
   if(S.artistMode){
     let c = S.artistPool.filter(x => x.images && x.images.small);
     if(S.pokemonOnly){ const m = c.filter(x => x.supertype === "Pokémon"); if(m.length) c = m; }
@@ -346,7 +352,7 @@ function filteredCards(){
   return c;
 }
 function poolCount(){
-  if(S.artistMode || S.artist || (S.pricesOk && S.priceCap != null)) return filteredCards().length;
+  if(S.artistMode || S.speciesMode || S.artist || (S.pricesOk && S.priceCap != null)) return filteredCards().length;
   return S.rarities.reduce((s,r)=> s + (S.checked[r.name] ? r.count : 0), 0);
 }
 
@@ -450,12 +456,13 @@ async function toggleSet(id){
   if(!id) return;
   S.err = ""; S.cardErr = "";
   S.artistMode = false; S.artistPool = []; S.artist = "";
+  S.speciesMode = false; S.speciesPool = []; S.species = "";
   if(S.setIds.includes(id)){ S.setIds = S.setIds.filter(x => x !== id); }
   else { S.setIds = [...S.setIds, id]; }
   await refresh();
 }
-async function selectAllSets(){ S.err=""; S.cardErr=""; S.artistMode=false; S.artistPool=[]; S.artist=""; S.setIds = S.sets.map(s=>s.id); await refresh(); }
-function clearSets(){ S.setIds = []; S.rarities = []; S.checked = {}; S.artists = []; S.artist = ""; S.artistMode=false; S.artistPool=[]; S.pricesSkipped = false; S.priceCap = null; render(); }
+async function selectAllSets(){ S.err=""; S.cardErr=""; S.artistMode=false; S.artistPool=[]; S.artist=""; S.speciesMode=false; S.speciesPool=[]; S.species=""; S.setIds = S.sets.map(s=>s.id); await refresh(); }
+function clearSets(){ S.setIds = []; S.rarities = []; S.checked = {}; S.artists = []; S.artist = ""; S.artistMode=false; S.artistPool=[]; S.speciesMode=false; S.speciesPool=[]; S.species=""; S.pricesSkipped = false; S.priceCap = null; render(); }
 function setTiles(q){
   q = (q||'').trim().toLowerCase();
   let list = S.sets;
@@ -479,7 +486,7 @@ function refreshPoolUI(){
   const el = document.getElementById('poolInfo');
   if(el){
     const uses = (S.cap!=="all" && pc>S.cap) ? ` · bracket uses ${S.cap}` : "";
-    el.textContent = `${pc} card${pc===1?'':'s'} in your pool${S.artistMode?` by ${S.artist} across every set`:S.setIds.length>1?` across ${S.setIds.length} sets`:''}${(S.pricesOk&&S.priceCap!=null)?` · ≤ $${S.priceCap}`:''}${uses}`;
+    el.textContent = `${pc} card${pc===1?'':'s'} in your pool${S.artistMode?` by ${S.artist} across every set`:S.speciesMode?` of ${S.species} across every set`:S.setIds.length>1?` across ${S.setIds.length} sets`:''}${(S.pricesOk&&S.priceCap!=null)?` · ≤ $${S.priceCap}`:''}${uses}`;
   }
   const btn = document.getElementById('startBtn');
   if(btn) btn.disabled = pc < 2;
@@ -497,7 +504,7 @@ function toggleRar(i){ const n=S.rarities[i].name; S.checked[n]=!S.checked[n]; s
 function preset(kind){ S.rarities.forEach(r=>{ S.checked[r.name]= kind==='all'?true:kind==='none'?false:isHit(r.name); }); S.rarities.forEach((r,i)=>syncRarRow(i)); refreshPoolUI(); }
 function setCap(v){ S.cap=v; const vals=[8,16,32,64,'all']; document.querySelectorAll('#capChips .chip').forEach((c,idx)=>c.classList.toggle('on', vals[idx]===v)); refreshPoolUI(); }
 function setArtist(v){ S.artist = v; refreshPoolUI(); }
-function artistSource(){ return S.setIds.length ? S.artists : S.allArtists; }
+function artistSource(){ return (S.setIds.length || S.speciesMode) ? S.artists : S.allArtists; }
 async function loadAllArtists(){
   if(S.loadingArtists || S.allArtists.length) return;
   S.loadingArtists = true; S.artistErr = ""; render();
@@ -512,6 +519,7 @@ async function loadAllArtists(){
   S.loadingArtists = false; render();
 }
 function pickGlobalArtist(name){
+  S.speciesMode = false; S.speciesPool = []; S.species = "";
   S.artistMode = true; S.artist = name;
   const pool = [];
   S.sets.forEach(s=>{ (S.cardCache[s.id]||[]).forEach(x=>{ if(x.images && x.images.small && (x.artist && String(x.artist).trim())===name) pool.push(x); }); });
@@ -521,6 +529,44 @@ function pickGlobalArtist(name){
   S.priceCap = null; S.artistOpen = false; render();
   loadArtistPrices(name);
 }
+async function pickSpecies(rawName){
+  const name = (rawName||"").trim();
+  if(!name) return;
+  S.artistMode = false; S.artistPool = []; S.artist = "";
+  S.speciesMode = true; S.species = name; S.speciesPool = [];
+  S.speciesErr = ""; S.cardErr = "";
+  S.loadingSpecies = true; S.loadingCards = true; render();
+  try{
+    const q = encodeURIComponent(`name:"${name}*"`);
+    const all = [];
+    let page = 1, fetched = 0, total = Infinity;
+    while(fetched < total && page <= 10){
+      const r = await fetch(`${PRICE_API}?q=${q}&select=id,name,supertype,subtypes,rarity,artist,number,set,images,tcgplayer,cardmarket&page=${page}&pageSize=250`, {headers: ptcgHeaders()});
+      if(!r.ok) throw 0;
+      const j = await r.json();
+      total = (typeof j.totalCount === "number") ? j.totalCount : 0;
+      (j.data||[]).forEach(c => {
+        if(c.set && c.set.id) c._setId = c.set.id;
+        const p = extractPrice(c); if(p) S.priceCache[c.id] = p;
+        all.push(c);
+      });
+      const got = j.data ? j.data.length : 0;
+      fetched += got;
+      if(got === 0) break;
+      page++;
+    }
+    S.speciesPool = all;
+    if(all.length) S.pricesOk = true;
+    else S.speciesErr = `No cards found for "${name}". Try a different spelling — e.g. "Pikachu", "Charizard", "Mewtwo".`;
+  }catch(e){ S.speciesErr = "Couldn't search the card database — check your connection."; }
+  recomputeRarities();
+  if(S.rarities.length) S.rarities.forEach(r=>S.checked[r.name]=true);
+  S.priceCap = null;
+  S.loadingSpecies = false; S.loadingCards = false;
+  render();
+}
+function submitSpecies(){ const el = document.getElementById('speciesInput'); if(el) pickSpecies(el.value); }
+function clearSpecies(){ S.speciesMode=false; S.species=""; S.speciesPool=[]; S.speciesErr=""; S.rarities=[]; S.checked={}; render(); }
 function artistItems(q){
   if(!S.setIds.length){
     if(S.loadingArtists) return `<div class="amore">Loading illustrators across all sets… ${S.loadProgress?`(${S.loadProgress.done}/${S.loadProgress.total})`:''}</div>`;
@@ -543,7 +589,7 @@ function onArtistToggle(open){ S.artistOpen = open; if(open && !S.setIds.length 
 function chooseArtist(i){
   const src = artistSource();
   const name = (i<0) ? "" : (src[i] ? src[i].name : "");
-  if(S.setIds.length){
+  if(S.setIds.length || S.speciesMode){
     S.artist = name;
     const s = document.getElementById('artistSearch'); filterArtists(s ? s.value : '');
     const sum = document.getElementById('artistSummary'); if(sum) sum.textContent = name || 'Any artist';
@@ -749,7 +795,7 @@ async function boot(){
 }
 
 function start(){
-  if(!S.setIds.length && !S.artistMode) return;
+  if(!S.setIds.length && !S.artistMode && !S.speciesMode) return;
   let pool = shuffle(filteredCards());
   if(S.cap!=="all" && pool.length>S.cap) pool = pool.slice(0,S.cap);
   if(pool.length<2){ S.err="Pick at least a couple of cards — add a set, widen the rarities, or raise the bracket size."; render(); return; }
@@ -888,6 +934,16 @@ function render(){
           <div id="artistList" class="artistlist">${artistItems('')}</div>
         </div>
       </details>
+      <label class="h">Pokémon${S.speciesMode?` <span style="color:var(--muted);font-weight:400">· ${esc(S.species)}</span>`:''}</label>
+      <div class="artistbox">
+        <div style="display:flex;gap:8px">
+          <input id="speciesInput" class="artistsearch" placeholder="Type a Pokémon — e.g. Pikachu, Charizard, Mewtwo" value="${esc(S.species||'')}" onkeydown="if(event.key==='Enter'){event.preventDefault();submitSpecies();}" oninput="S.speciesInput=this.value">
+          <button class="mini-btn" style="padding:10px 14px" onclick="submitSpecies()" ${S.loadingSpecies?'disabled':''}>${S.loadingSpecies?'Loading…':'Search'}</button>
+          ${S.speciesMode?`<button class="mini-btn" style="padding:10px 14px" onclick="clearSpecies()">Clear</button>`:''}
+        </div>
+        ${S.speciesErr?`<p class="err" style="margin-top:6px">${esc(S.speciesErr)}</p>`:''}
+        ${S.speciesMode && !S.speciesErr ? `<p class="poolinfo" style="margin-top:6px;text-align:left">Battling every ${esc(S.species)} card across all sets.</p>`:''}
+      </div>
       <label class="h">Max price</label>
       ${(()=>{
         if(S.pricesSkipped) return `<p class="poolinfo" style="margin:0;text-align:left">Too many sets for live prices (off above ${PRICE_LIMIT}). Pick fewer sets, or filter by rarity to keep it focused.</p>`;
@@ -906,7 +962,7 @@ function render(){
       <div class="toggle" onclick="togglePoke()">
         <span class="sw ${S.pokemonOnly?"on":""}" id="pokeSw"><i></i></span> Pokémon cards only (skip Trainers &amp; Energy)
       </div>
-      <div class="poolinfo" id="poolInfo">${pc} card${pc===1?'':'s'} in your pool${S.artistMode?` by ${esc(S.artist)} across every set`:S.setIds.length>1?` across ${S.setIds.length} sets`:''}${(S.pricesOk&&S.priceCap!=null)?` · ≤ $${S.priceCap}`:''}${uses}</div>
+      <div class="poolinfo" id="poolInfo">${pc} card${pc===1?'':'s'} in your pool${S.artistMode?` by ${esc(S.artist)} across every set`:S.speciesMode?` of ${esc(S.species)} across every set`:S.setIds.length>1?` across ${S.setIds.length} sets`:''}${(S.pricesOk&&S.priceCap!=null)?` · ≤ $${S.priceCap}`:''}${uses}</div>
       ${S.err?`<p class="err">${esc(S.err)}</p>`:""}
       <button class="primary" id="startBtn" ${pc<2?"disabled":""} onclick="start()">Start the bracket</button>
     </div>`;
@@ -926,7 +982,7 @@ function render(){
     const [a,b] = g.pairs[g.matchIdx];
     const total = firstPoolSize()-1, played = g.matchesLog.length;
     const prog = total>0 ? Math.min(100, played/total*100) : 0;
-    const multi = S.setIds.length>1 || S.artistMode;
+    const multi = S.setIds.length>1 || S.artistMode || S.speciesMode;
     const pc = (side,card)=>{ const pr = priceOf(card); return `<div class="pick ${S.picking===side?"chosen":""} ${S.picking&&S.picking!==side?"dim":""}" onclick="pick('${side}')">
         ${cardFrameHTML(card,false)}
         <div class="caption"><b>${esc(card.name)}</b><span>${esc(card.rarity||card.supertype||"")}</span>${pr?`<span class="priceline">${fmtPrice(pr)} <span class="src">${pr.src}</span></span>`:''}${multi?`<span class="setlabel">${esc(setName(card._setId))}</span>`:''}${card.artist?`<span class="artistlabel">Illus. ${esc(card.artist)}</span>`:''}</div></div>`; };
@@ -983,7 +1039,7 @@ function render(){
 
   if(S.phase==="done" && S.game && S.game.done){
     const g = S.game, champ = g.champion;
-    const multi = S.setIds.length>1 || S.artistMode;
+    const multi = S.setIds.length>1 || S.artistMode || S.speciesMode;
     const champSet = setName(champ._setId);
     const stageSize = lab => lab==="The Final"?2 : lab==="Semifinals"?4 : lab==="Quarterfinals"?8 : (parseInt((lab.match(/Round of (\d+)/)||[])[1])||9999);
     const placeName = lab => { const s=stageSize(lab); return s===2?"Runner-up" : s===4?"Semifinalists" : s===8?"Quarterfinalists" : lab; };
@@ -1001,8 +1057,8 @@ function render(){
     }).join("");
     app.innerHTML = `<div class="done ${fl}">
       <div class="crown">${ic('crown')}</div>
-      <p class="eyebrow">${S.artistMode?`Your favourite by ${esc(S.artist)}`:multi?`Your favourite across ${S.setIds.length} sets`:`Your favourite from ${esc(champSet)}`}</p>
-      ${(multi && !S.artistMode)?`<details class="setsdrop"><summary>${S.setIds.length} sets included</summary><p class="setsline">${S.setIds.map(id=>esc(setName(id))).join("  ·  ")}</p></details>`:""}
+      <p class="eyebrow">${S.artistMode?`Your favourite by ${esc(S.artist)}`:S.speciesMode?`Your favourite ${esc(S.species)}`:multi?`Your favourite across ${S.setIds.length} sets`:`Your favourite from ${esc(champSet)}`}</p>
+      ${(multi && !S.artistMode && !S.speciesMode)?`<details class="setsdrop"><summary>${S.setIds.length} sets included</summary><p class="setsline">${S.setIds.map(id=>esc(setName(id))).join("  ·  ")}</p></details>`:""}
       <div class="champ-stage"><div class="champ-card" id="champ">${cardFrameHTML(champ,true)}<div class="holo"></div></div></div>
       <h2 class="name">${esc(champ.name)}</h2>
       <p class="sub">${champ.rarity?esc(champ.rarity)+" · ":""}${esc(champSet)} #${esc(champ.number||"")}${champ.artist?` · Illus. ${esc(champ.artist)}`:''}${(()=>{const p=priceOf(champ); if(!p) return ''; const src=p.url?`<a href="${p.url}" target="_blank" rel="noopener" style="color:#7fae8c">${p.src} ↗</a>`:p.src; return ` · <b style="color:#9fe6b0">${fmtPrice(p)}</b> <span style="font-size:12px;color:#6f7488">${src}</span>`;})()}</p>
@@ -1046,6 +1102,7 @@ window.shareMatchup=shareMatchup; window.shareChamp=shareChamp;
 window.filterArtists=filterArtists; window.chooseArtist=chooseArtist;
 window.onArtistToggle=onArtistToggle; window.loadAllArtists=loadAllArtists;
 window.filterSets=filterSets; window.onSetPickerToggle=onSetPickerToggle;
+window.submitSpecies=submitSpecies; window.clearSpecies=clearSpecies; window.pickSpecies=pickSpecies;
 boot();
 </script>
 </body>

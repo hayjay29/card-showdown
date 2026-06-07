@@ -804,13 +804,16 @@ function preloadUpcoming(){
 }
 
 // ---------- render ----------
+let _lastPhase = null;
 function render(){
   const _rs = (document.getElementById('rarList')||{}).scrollTop;
   const _ss = (document.getElementById('setGrid')||{}).scrollTop;
+  const fl = (_lastPhase !== S.phase) ? 'float-in' : '';
+  _lastPhase = S.phase;
   if(S.phase==="boot"){ app.innerHTML = `<div class="loading"><div class="spin" style="font-size:28px;color:var(--gold)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9"/></svg></div><span>Loading sets…</span></div>`; return; }
 
   if(S.phase==="neterr"){
-    app.innerHTML = `<div class="panel float-in"><p class="lead">Couldn't reach the card database. This page needs an internet connection — make sure you've opened it in a normal web browser (Chrome, Safari, etc.) with network access, not an offline viewer.</p>
+    app.innerHTML = `<div class="panel ${fl}"><p class="lead">Couldn't reach the card database. This page needs an internet connection — make sure you've opened it in a normal web browser (Chrome, Safari, etc.) with network access, not an offline viewer.</p>
     <button class="primary" onclick="boot()">Try again</button></div>`;
     return;
   }
@@ -829,7 +832,7 @@ function render(){
         : `<div class="rar-list" id="rarList">${S.rarities.map((r,i)=>rarRowHTML(r,i)).join("")}</div>`;
     const pc = poolCount();
     const uses = (S.cap!=="all" && pc>S.cap) ? ` · bracket uses ${S.cap}` : "";
-    app.innerHTML = `<div class="panel float-in">
+    app.innerHTML = `<div class="panel ${fl}">
       <p class="lead">Add sets and rarities to build a pool — or skip sets entirely and pick one illustrator to battle their cards from every set. Two cards face off, you tap the one you like more, winners advance until one card is left.${STATS.picks?`<br><button class="statlink" onclick="openStats()">${ic('stats')} See your all-time picks (${STATS.picks})</button>`:''}</p>
       <label class="h">Sets${S.setIds.length?` <span style="color:var(--muted);font-weight:400">(${S.setIds.length})</span>`:''}</label>
       <details class="setpicker" id="setPicker" ${S.setPickerOpen?'open':''} ontoggle="onSetPickerToggle(this.open)">
@@ -931,7 +934,7 @@ function render(){
       return `<div class="statrow"><span class="srank">${i+1}</span><span class="sname">${esc(labelFn(e))}</span><span class="sval">${e.champs?`<span class="scrown">${ic('crown')} ${e.champs}</span> `:''}${e.wins}/${e.seen} · ${wr}%</span></div>`;
     }).join("");
     const section = (title, body) => body ? `<div class="statsec"><div class="statsec-h">${title}</div>${body}</div>` : "";
-    app.innerHTML = `<div class="done float-in">
+    app.innerHTML = `<div class="done ${fl}">
       <p class="eyebrow">Your all-time stats</p>
       ${!STATS_OK?`<p class="champstats">⚠ Your browser isn't saving stats between sessions (private mode, or opened as a local file). Host the page online and they'll persist.</p>`:''}
       ${cards.length?`
@@ -972,7 +975,7 @@ function render(){
       const body = s<=8 ? `<div class="podium">${cards.map(mini).join("")}</div>` : `<div class="tags">${cards.map(tag).join("")}</div>`;
       return `<div class="resgroup">${head}${body}</div>`;
     }).join("");
-    app.innerHTML = `<div class="done float-in">
+    app.innerHTML = `<div class="done ${fl}">
       <div class="crown">${ic('crown')}</div>
       <p class="eyebrow">${S.artistMode?`Your favourite by ${esc(S.artist)}`:multi?`Your favourite across ${S.setIds.length} sets`:`Your favourite from ${esc(champSet)}`}</p>
       ${(multi && !S.artistMode)?`<details class="setsdrop"><summary>${S.setIds.length} sets included</summary><p class="setsline">${S.setIds.map(id=>esc(setName(id))).join("  ·  ")}</p></details>`:""}

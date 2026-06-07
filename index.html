@@ -224,6 +224,7 @@ const S = {
   communityStats: null,
   speciesMode: false, species: "", speciesPool: [], speciesOpen: false, speciesErr: "", loadingSpecies: false, speciesInput: "",
   speciesSuggestions: [], speciesSuggesting: false,
+  pokedex: [], loadingPokedex: false, pokedexErr: "",
 };
 
 // ---------- supabase community layer ----------
@@ -569,8 +570,52 @@ async function pickSpecies(rawName, dexNum){
 }
 function submitSpecies(){ const el = document.getElementById('speciesInput'); if(el) pickSpecies(el.value); }
 function clearSpecies(){ S.speciesMode=false; S.species=""; S.speciesPool=[]; S.speciesErr=""; S.speciesSuggestions=[]; S.speciesInput=""; S.rarities=[]; S.checked={}; render(); }
-let _speciesDebounce = null;
-let _speciesReqId = 0;
+function prettifyPokemonName(n){
+  const special = {
+    'mr-mime':'Mr. Mime','mr-rime':'Mr. Rime','mime-jr':'Mime Jr.',
+    'type-null':'Type: Null','porygon-z':'Porygon-Z','ho-oh':'Ho-Oh',
+    'nidoran-f':'Nidoran ♀','nidoran-m':'Nidoran ♂',
+    'tapu-koko':'Tapu Koko','tapu-lele':'Tapu Lele','tapu-bulu':'Tapu Bulu','tapu-fini':'Tapu Fini',
+    'farfetchd':'Farfetch’d','sirfetchd':'Sirfetch’d','flabebe':'Flabébé',
+    'jangmo-o':'Jangmo-o','hakamo-o':'Hakamo-o','kommo-o':'Kommo-o',
+    'great-tusk':'Great Tusk','scream-tail':'Scream Tail','brute-bonnet':'Brute Bonnet',
+    'flutter-mane':'Flutter Mane','slither-wing':'Slither Wing','sandy-shocks':'Sandy Shocks',
+    'iron-treads':'Iron Treads','iron-bundle':'Iron Bundle','iron-hands':'Iron Hands',
+    'iron-jugulis':'Iron Jugulis','iron-moth':'Iron Moth','iron-thorns':'Iron Thorns',
+    'iron-valiant':'Iron Valiant','iron-leaves':'Iron Leaves','iron-boulder':'Iron Boulder',
+    'iron-crown':'Iron Crown','roaring-moon':'Roaring Moon','walking-wake':'Walking Wake',
+    'gouging-fire':'Gouging Fire','raging-bolt':'Raging Bolt','wo-chien':'Wo-Chien',
+    'chien-pao':'Chien-Pao','ting-lu':'Ting-Lu','chi-yu':'Chi-Yu',
+  };
+  if(special[n]) return special[n];
+  return n.split('-').map(p => p[0] ? p[0].toUpperCase() + p.slice(1) : p).join('-');
+}
+async function loadPokedex(){
+  if(S.pokedex && S.pokedex.length) return;
+  try{
+    const cached = localStorage.getItem('cardshowdown_pokedex_v1');
+    if(cached){
+      const p = JSON.parse(cached);
+      if(Array.isArray(p) && p.length){ S.pokedex = p; return; }
+    }
+  }catch(e){}
+  S.loadingPokedex = true;
+  try{
+    const r = await fetch('https://pokeapi.co/api/v2/pokemon-species?limit=1500');
+    if(!r.ok) throw 0;
+    const j = await r.json();
+    const list = (j.results||[])
+      .map(p => {
+        const m = (p.url||'').match(/\/(\d+)\/?$/);
+        return { name: prettifyPokemonName(p.name||''), dex: m ? parseInt(m[1]) : null };
+      })
+      .filter(x => x.dex && x.name)
+      .sort((a,b) => a.dex - b.dex);
+    S.pokedex = list;
+    try{ localStorage.setItem('cardshowdown_pokedex_v1', JSON.stringify(list)); }catch(e){}
+  }catch(e){ S.pokedexErr = "Couldn't load Pokédex — search will be slow."; }
+  S.loadingPokedex = false;
+}
 function speciesItemsHTML(){
   const list = S.speciesSuggestions || [];
   if(S.speciesSuggesting && !list.length) return `<div class="amore">Searching…</div>`;
@@ -583,49 +628,25 @@ function updateSpeciesListUI(){
   el.style.display = hasContent ? '' : 'none';
   el.innerHTML = speciesItemsHTML();
 }
-function searchSpeciesNow(q, reqId){
-  const enc = encodeURIComponent(`name:${q}*`);
-  fetch(`${PRICE_API}?q=${enc}&select=name,nationalPokedexNumbers&pageSize=250&orderBy=name`, {headers: ptcgHeaders()})
-    .then(r => r.ok ? r.json() : Promise.reject(0))
-    .then(j => {
-      if(reqId !== _speciesReqId) return; // stale response
-      const byDex = new Map();
-      (j.data||[]).forEach(c => {
-        const dex = c.nationalPokedexNumbers;
-        if(!dex || dex.length !== 1) return; // skip trainers/energy and tag-team cards
-        const n = (c.name||'').trim();
-        if(!n) return;
-        const cur = byDex.get(dex[0]);
-        if(!cur || n.length < cur.name.length) byDex.set(dex[0], {name:n, dex:dex[0]});
-      });
-      const ql = q.toLowerCase();
-      const list = Array.from(byDex.values())
-        .filter(x => x.name.toLowerCase().startsWith(ql))
-        .sort((a,b) => a.name.localeCompare(b.name))
-        .slice(0, 30);
-      S.speciesSuggestions = list;
-      S.speciesSuggesting = false;
-      updateSpeciesListUI();
-    })
-    .catch(() => {
-      if(reqId !== _speciesReqId) return;
-      S.speciesSuggestions = []; S.speciesSuggesting = false;
-      updateSpeciesListUI();
-    });
-}
 function searchSpecies(q){
   q = (q||'').trim();
   S.speciesInput = q;
-  if(_speciesDebounce){ clearTimeout(_speciesDebounce); _speciesDebounce = null; }
-  if(q.length < 2){
+  if(q.length < 1){
     S.speciesSuggestions = []; S.speciesSuggesting = false;
     updateSpeciesListUI();
     return;
   }
-  S.speciesSuggesting = true;
+  if(!S.pokedex || !S.pokedex.length){
+    S.speciesSuggesting = true; updateSpeciesListUI();
+    loadPokedex().then(() => { if(S.speciesInput === q) searchSpecies(q); });
+    return;
+  }
+  const ql = q.toLowerCase();
+  S.speciesSuggestions = S.pokedex
+    .filter(p => p.name.toLowerCase().startsWith(ql))
+    .slice(0, 30);
+  S.speciesSuggesting = false;
   updateSpeciesListUI();
-  const reqId = ++_speciesReqId;
-  _speciesDebounce = setTimeout(() => searchSpeciesNow(q, reqId), 220);
 }
 function pickSpeciesAt(i){ const s = (S.speciesSuggestions||[])[i]; if(s) pickSpecies(s.name, s.dex); }
 function artistItems(q){
@@ -844,6 +865,7 @@ function shareChamp(){
 // ---------- data ----------
 async function boot(){
   S.phase = "boot"; render();
+  loadPokedex(); // fire-and-forget; first species search will await it if needed
   try{
     const r = await fetch(`${DATA}/sets/en.json`);
     if(!r.ok) throw 0;

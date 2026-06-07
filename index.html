@@ -530,15 +530,16 @@ function pickGlobalArtist(name){
   S.priceCap = null; S.artistOpen = false; render();
   loadArtistPrices(name);
 }
-async function pickSpecies(rawName){
+async function pickSpecies(rawName, dexNum){
   const name = (rawName||"").trim();
   if(!name) return;
   S.artistMode = false; S.artistPool = []; S.artist = "";
   S.speciesMode = true; S.species = name; S.speciesPool = [];
   S.speciesErr = ""; S.cardErr = "";
+  S.speciesSuggestions = []; S.speciesSuggesting = false;
   S.loadingSpecies = true; S.loadingCards = true; render();
   try{
-    const q = encodeURIComponent(`name:"${name}*"`);
+    const q = dexNum ? encodeURIComponent(`nationalPokedexNumbers:${dexNum}`) : encodeURIComponent(`name:"${name}*"`);
     const all = [];
     let page = 1, fetched = 0, total = Infinity;
     while(fetched < total && page <= 10){
@@ -574,7 +575,7 @@ function speciesItemsHTML(){
   const list = S.speciesSuggestions || [];
   if(S.speciesSuggesting && !list.length) return `<div class="amore">Searching…</div>`;
   if(!list.length) return '';
-  return list.map((n,i) => `<div class="arow" onclick="pickSpeciesAt(${i})"><span>${esc(n)}</span></div>`).join('');
+  return list.map((s,i) => `<div class="arow" onclick="pickSpeciesAt(${i})"><span>${esc(s.name)}</span><span class="cnt">#${s.dex}</span></div>`).join('');
 }
 function updateSpeciesListUI(){
   const el = document.getElementById('speciesList'); if(!el) return;
@@ -584,16 +585,25 @@ function updateSpeciesListUI(){
 }
 function searchSpeciesNow(q, reqId){
   const enc = encodeURIComponent(`name:${q}*`);
-  fetch(`${PRICE_API}?q=${enc}&select=name&pageSize=100&orderBy=name`, {headers: ptcgHeaders()})
+  fetch(`${PRICE_API}?q=${enc}&select=name,nationalPokedexNumbers&pageSize=250&orderBy=name`, {headers: ptcgHeaders()})
     .then(r => r.ok ? r.json() : Promise.reject(0))
     .then(j => {
       if(reqId !== _speciesReqId) return; // stale response
-      const seen = new Set(); const names = [];
+      const byDex = new Map();
       (j.data||[]).forEach(c => {
-        const n = c.name && c.name.trim();
-        if(n && !seen.has(n)){ seen.add(n); names.push(n); }
+        const dex = c.nationalPokedexNumbers;
+        if(!dex || dex.length !== 1) return; // skip trainers/energy and tag-team cards
+        const n = (c.name||'').trim();
+        if(!n) return;
+        const cur = byDex.get(dex[0]);
+        if(!cur || n.length < cur.name.length) byDex.set(dex[0], {name:n, dex:dex[0]});
       });
-      S.speciesSuggestions = names.slice(0, 30);
+      const ql = q.toLowerCase();
+      const list = Array.from(byDex.values())
+        .filter(x => x.name.toLowerCase().startsWith(ql))
+        .sort((a,b) => a.name.localeCompare(b.name))
+        .slice(0, 30);
+      S.speciesSuggestions = list;
       S.speciesSuggesting = false;
       updateSpeciesListUI();
     })
@@ -617,7 +627,7 @@ function searchSpecies(q){
   const reqId = ++_speciesReqId;
   _speciesDebounce = setTimeout(() => searchSpeciesNow(q, reqId), 220);
 }
-function pickSpeciesAt(i){ const n = (S.speciesSuggestions||[])[i]; if(n) pickSpecies(n); }
+function pickSpeciesAt(i){ const s = (S.speciesSuggestions||[])[i]; if(s) pickSpecies(s.name, s.dex); }
 function artistItems(q){
   if(!S.setIds.length){
     if(S.loadingArtists) return `<div class="amore">Loading illustrators across all sets… ${S.loadProgress?`(${S.loadProgress.done}/${S.loadProgress.total})`:''}</div>`;

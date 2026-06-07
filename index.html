@@ -210,6 +210,7 @@
 const DATA = "https://raw.githubusercontent.com/PokemonTCG/pokemon-tcg-data/master";
 const SB_URL = "https://ytwlzajpzqsqxwwxsayn.supabase.co";
 const SB_KEY = "sb_publishable_MTDBROBGA_rOL3g-d-fm2A_FywBMy7-";
+const PTCG_KEY = "305dca7a-457b-4940-8a35-95e855c30c0a";
 const app = document.getElementById("app");
 
 const S = {
@@ -351,6 +352,7 @@ function poolCount(){
 
 // ---------- prices (TCGplayer market, via pokemontcg.io API) ----------
 const PRICE_API = "https://api.pokemontcg.io/v2/cards";
+function ptcgHeaders(){ return PTCG_KEY ? { 'X-Api-Key': PTCG_KEY } : {}; }
 function extractPrice(c){
   const tp = c.tcgplayer && c.tcgplayer.prices;
   if(tp){
@@ -371,7 +373,7 @@ async function loadPrices(id){
   try{
     let page = 1, fetched = 0, total = Infinity;
     while(fetched < total && page <= 4){
-      const r = await fetch(`${PRICE_API}?q=set.id:${id}&select=id,tcgplayer,cardmarket&page=${page}&pageSize=250`);
+      const r = await fetch(`${PRICE_API}?q=set.id:${id}&select=id,tcgplayer,cardmarket&page=${page}&pageSize=250`, {headers: ptcgHeaders()});
       if(!r.ok) throw 0;
       const j = await r.json();
       total = (typeof j.totalCount === "number") ? j.totalCount : 0;
@@ -385,6 +387,28 @@ async function loadPrices(id){
   }catch(e){ S.pricesErr = true; S.pricedSets[id] = false; }
 }
 function setPriceCap(v){ S.priceCap=v; const vals=[null,5,20,50,100]; document.querySelectorAll('#priceChips .chip').forEach((c,idx)=>c.classList.toggle('on', vals[idx]===v)); refreshPoolUI(); }
+
+async function loadArtistPrices(name){
+  if(!name || !PTCG_KEY) return;
+  S.loadingPrices = true; S.pricesErr = false; render();
+  try{
+    const q = encodeURIComponent(`artist:"${name}"`);
+    let page = 1, fetched = 0, total = Infinity;
+    while(fetched < total && page <= 10){
+      const r = await fetch(`${PRICE_API}?q=${q}&select=id,tcgplayer,cardmarket&page=${page}&pageSize=250`, {headers: ptcgHeaders()});
+      if(!r.ok) throw 0;
+      const j = await r.json();
+      total = (typeof j.totalCount === "number") ? j.totalCount : 0;
+      (j.data||[]).forEach(c => { const p = extractPrice(c); if(p) S.priceCache[c.id] = p; });
+      const got = j.data ? j.data.length : 0;
+      fetched += got;
+      if(got === 0) break;
+      page++;
+    }
+    S.pricesOk = true;
+  }catch(e){ S.pricesErr = true; }
+  S.loadingPrices = false; render();
+}
 
 async function loadSetCards(id){
   if(S.cardCache[id]) return;
@@ -495,6 +519,7 @@ function pickGlobalArtist(name){
   recomputeRarities();
   S.rarities.forEach(r=>S.checked[r.name]=true); // include all of the artist's cards by default
   S.priceCap = null; S.artistOpen = false; render();
+  loadArtistPrices(name);
 }
 function artistItems(q){
   if(!S.setIds.length){
@@ -865,7 +890,6 @@ function render(){
       </details>
       <label class="h">Max price</label>
       ${(()=>{
-        if(S.artistMode) return `<p class="poolinfo" style="margin:0;text-align:left">Price filtering is off in all-set artist mode (prices aren't loaded across every set).</p>`;
         if(S.pricesSkipped) return `<p class="poolinfo" style="margin:0;text-align:left">Too many sets for live prices (off above ${PRICE_LIMIT}). Pick fewer sets, or filter by rarity to keep it focused.</p>`;
         if(S.loadingPrices) return `<p class="poolinfo" style="margin:0;text-align:left">Fetching prices…</p>`;
         const bc = poolSource(); const pn = bc.filter(c=>priceOf(c)).length;
